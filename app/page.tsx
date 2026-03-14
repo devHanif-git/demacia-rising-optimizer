@@ -22,15 +22,15 @@ const ENEMY_TYPES = [
 const ENEMY_DATA: Record<string, { tags: string[], threatPerUnit: number }> = {
   'Drakehound': { tags: ['needs_aoe', 'assassin'], threatPerUnit: 4 },
   'Krug': { tags: ['heavy_armor', 'anti_melee'], threatPerUnit: 6 },
-  'Tribal Warrior': { tags: ['needs_aoe', 'anti_ranged', 'assassin'], threatPerUnit: 5 },
+  'Tribal Warrior': { tags: ['needs_aoe', 'anti_ranged', 'anti_ranged_hard_counter', 'assassin'], threatPerUnit: 7 }, // Strong anti-ranged
   'Troll': { tags: ['ranged'], threatPerUnit: 5 },
   'Yeti': { tags: ['ranged', 'aoe_threat', 'bruiser'], threatPerUnit: 8 },
   'Cloud Drake': { tags: ['boss', 'aoe_threat', 'anti_light'], threatPerUnit: 25 },
   'Noxian Infantry': { tags: ['needs_aoe', 'anti_guard'], threatPerUnit: 2 },
-  'Noxian Drakehound': { tags: ['needs_aoe', 'assassin'], threatPerUnit: 4 },
+  'Noxian Drakehound': { tags: ['needs_aoe', 'assassin', 'anti_ranged'], threatPerUnit: 4 },
   'Noxian Battlemage': { tags: ['ranged', 'anti_tank', 'weak_to_ranged'], threatPerUnit: 7 },
-  'Basilisk': { tags: ['anti_ranged', 'heavy_armor', 'weak_to_ranger'], threatPerUnit: 15 },
-  'Noxian Mauler': { tags: ['bruiser', 'anti_light', 'weak_to_hero'], threatPerUnit: 12 },
+  'Basilisk': { tags: ['anti_ranged', 'anti_ranged_hard_counter', 'heavy_armor', 'weak_to_ranger', 'slow_movement'], threatPerUnit: 15 }, // Strong anti-ranged but slow
+  'Noxian Mauler': { tags: ['bruiser', 'anti_light', 'weak_to_hero', 'weak_to_ranger'], threatPerUnit: 12 },
 };
 
 const CHAMPIONS = [
@@ -46,13 +46,13 @@ const CHAMPIONS = [
 
 const CHAMPION_DATA: Record<string, string[]> = {
   'Poppy': ['boss', 'bruiser', 'anti_melee'],
-  'Galio': ['assassin', 'anti_ranged', 'needs_aoe'],
+  'Galio': ['assassin', 'anti_ranged', 'needs_aoe', 'anti_ranged_hard_counter'],
   'Kayle': ['heavy_armor', 'bruiser', 'boss'],
   'Morgana': ['needs_aoe', 'anti_ranged', 'assassin'],
   'Garen': ['needs_aoe', 'anti_guard', 'anti_light'],
-  'Sona': ['needs_aoe', 'ranged'],
-  'Quinn': ['ranged', 'weak_to_ranged', 'assassin'],
-  'Jarvan IV': ['boss', 'anti_tank', 'weak_to_hero'],
+  'Sona': ['needs_aoe', 'ranged', 'healer', 'support'],
+  'Quinn': ['ranged', 'weak_to_ranger', 'assassin', 'anti_ranged'], // Ranged sniper for "far away units"
+  'Jarvan IV': ['boss', 'anti_tank', 'bruiser', 'support'], // Melee inspirer
 };
 
 const PLAYER_UNITS = [
@@ -63,11 +63,30 @@ const PLAYER_UNITS = [
 ];
 
 const UNIT_DATA: Record<string, string[]> = {
-  'Guard': ['assassin', 'anti_ranged', 'ranged'],
-  'Archer': ['needs_aoe', 'weak_to_ranged'],
-  'Soldier': ['anti_light', 'bruiser', 'anti_tank'],
-  'Ranger': ['heavy_armor', 'boss', 'weak_to_ranger'],
+  'Guard': ['assassin', 'anti_ranged', 'ranged', 'anti_ranged_hard_counter'],
+  'Archer': ['needs_aoe', 'weak_to_ranged', 'slow_movement'],
+  'Soldier': ['anti_light', 'bruiser', 'anti_tank', 'anti_melee'],
+  'Ranger': ['heavy_armor', 'boss', 'weak_to_ranger', 'slow_movement'],
 };
+
+const CHAMPION_EQUIVALENTS: Record<string, string> = {
+  'Poppy': 'Soldier',
+  'Galio': 'Soldier',
+  'Garen': 'Guard',
+  'Kayle': 'Guard',
+  'Morgana': 'Archer',
+  'Sona': 'Archer',
+  'Quinn': 'Ranger',
+  'Jarvan IV': 'Soldier', // Corrected to a melee equivalent since he is a melee champion
+};
+
+const UNIVERSAL_RATIO: Record<string, number> = {
+  'Soldier': 2,
+  'Guard': 2,
+  'Archer': 2,
+  'Ranger': 1,
+};
+const UNIVERSAL_RATIO_TOTAL = 7;
 
 // --- Types ---
 
@@ -98,6 +117,7 @@ export default function DemaciaRisingOptimizer() {
   const [planWithChamps, setPlanWithChamps] = useState<DefensePlan | null>(null);
   const [planNoChamps, setPlanNoChamps] = useState<DefensePlan | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
 
   // --- Load/Save Settings ---
   useEffect(() => {
@@ -143,100 +163,193 @@ export default function DemaciaRisingOptimizer() {
     );
   };
 
-  // --- Calculation Logic (Tag-based Heuristic) ---
+  // --- Calculation Logic (Targeting & Tag Heuristic) ---
+  const getUnitIcon = (name: string) => {
+    const override: Record<string, string> = {
+      'Cloud Drake': 'https://wiki.leagueoflegends.com/en-us/Special:FilePath/Cloud_Drake_DR_Sprite.png',
+      'Guard': 'https://wiki.leagueoflegends.com/en-us/images/thumb/Guard_DR_Sprite_01.png/53px-Guard_DR_Sprite_01.png?31a7a',
+      'Archer': 'https://wiki.leagueoflegends.com/en-us/images/thumb/Archer_DR_Sprite_01.png/53px-Archer_DR_Sprite_01.png?efa73',
+      'Soldier': 'https://wiki.leagueoflegends.com/en-us/images/thumb/Soldier_DR_Sprite_01.png/53px-Soldier_DR_Sprite_01.png?32556',
+      'Ranger': 'https://wiki.leagueoflegends.com/en-us/images/thumb/Ranger_DR_Sprite_01.png/53px-Ranger_DR_Sprite_01.png?631b5'
+    };
+    if (override[name]) return override[name];
+    
+    const fileName = `${name.replace(/\s+/g, '_')}_DR_Sprite.png`;
+    return `https://wiki.leagueoflegends.com/en-us/images/thumb/${fileName}/53px-${fileName}`;
+  };
+
   const calculateDefense = () => {
     setIsCalculating(true);
     
     setTimeout(() => {
       // 1. Calculate total threat per tag
       const tagThreats: Record<string, number> = {};
+      let totalThreatVolume = 0;
+      
       enemies.forEach(enemy => {
         const data = ENEMY_DATA[enemy.type];
         if (data) {
-          const threat = data.threatPerUnit * enemy.count;
+          const expectedThreat = data.threatPerUnit * enemy.count;
+          totalThreatVolume += expectedThreat;
+          
           data.tags.forEach(tag => {
-            tagThreats[tag] = (tagThreats[tag] || 0) + threat;
+            tagThreats[tag] = (tagThreats[tag] || 0) + expectedThreat;
           });
         }
       });
 
-      // 2. Score Champions
+      // 2. Adjust for Hard Counters (Anti-Ranged Pressure vs Ranger Necessity)
+      const antiRangedPressure = tagThreats['anti_ranged_hard_counter'] || 0;
+      const isRangedDangerous = antiRangedPressure > (totalThreatVolume * 0.2); // If 20%+ of threat directly hunts ranged
+      
+      // EXCEPTION: Are slow, highly-armored, or shielded units present? 
+      // If Basilisk or Noxian Mauler exist, we *must* have Rangers even if Tribal Warriors are present.
+      const rangerNecessity = (tagThreats['slow_movement'] || 0) + (tagThreats['weak_to_ranger'] || 0);
+      const requiresRangers = rangerNecessity > 0;
+
+      // 3. Score Champions
       const champScores: { name: string, score: number }[] = [];
       unlockedChampions.forEach(champ => {
         const tags = CHAMPION_DATA[champ] || [];
-        const score = tags.reduce((sum, tag) => sum + (tagThreats[tag] || 0), 0);
+        let score = tags.reduce((sum, tag) => sum + (tagThreats[tag] || 0), 0);
+        
+        // --- Custom Champion Synergies ---
+        if (champ === 'Sona') {
+          // Sona is a support champion that heals allied units.
+          // Her base healing value scales with the size of the army (slots) and total incoming damage (threat).
+          score += (maxSlots * 1.2) + (totalThreatVolume * 0.15);
+          
+          // She also synergizes well when building heavy ranged compositions
+          score += (tagThreats['weak_to_ranged'] || 0) * 0.8;
+          score += (tagThreats['weak_to_ranger'] || 0) * 0.8;
+          
+          if (isRangedDangerous) {
+            // Because she is ranged herself, massive anti-ranged pressure still reduces her survivability/value
+            score -= (antiRangedPressure * 0.3);
+          }
+        }
+
+        if (champ === 'Jarvan IV') {
+          // Jarvan IV is a melee champion who inspires allies.
+          // His buffing presence means his value scales strongly with army size.
+          score += (maxSlots * 1.5);
+          
+          // Being melee, he can be countered slightly by heavy anti-melee frontline, but not as severely as typical frontliners due to his buffs
+          score -= (tagThreats['anti_melee'] || 0) * 0.1;
+        }
+
+        if (champ === 'Quinn') {
+          // Quinn sends Valor to damage "far away units", acting as an exceptional sniper.
+          // Her value skyrockets when the enemy brings high-value ranged threats (like Trolls or Battlemages).
+          score += (tagThreats['ranged'] || 0) * 1.5;
+          score += (tagThreats['assassin'] || 0) * 0.5; // Good at taking out squishy high-value targets
+          
+          if (isRangedDangerous) {
+            // She is still ranged, and vulnerable to extreme anti-ranged diving units
+            score -= (antiRangedPressure * 0.3);
+          }
+        }
+        
         champScores.push({ name: champ, score });
       });
       champScores.sort((a, b) => b.score - a.score);
 
-      // 3. Score Units
-      const unitScores: Record<string, number> = {};
-      let totalUnitScore = 0;
-      PLAYER_UNITS.forEach(unit => {
-        const tags = UNIT_DATA[unit] || [];
-        const score = tags.reduce((sum, tag) => sum + (tagThreats[tag] || 0), 0);
-        unitScores[unit] = score;
-        totalUnitScore += score;
-      });
-
-      // Helper to allocate slots using Largest Remainder Method
-      const allocateSlots = (availableSlots: number): Record<string, number> => {
+      // 4. Calculate Base Universal Composition
+      const getBaseUniversalUnits = (slots: number): Record<string, number> => {
         const allocation: Record<string, number> = { Guard: 0, Archer: 0, Soldier: 0, Ranger: 0 };
-        if (totalUnitScore === 0) {
-          // Fallback if no specific threats
-          allocation['Guard'] = Math.floor(availableSlots / 2);
-          allocation['Ranger'] = Math.ceil(availableSlots / 2);
-          return allocation;
-        }
-
         let allocated = 0;
         const remainders: { unit: string, remainder: number }[] = [];
 
         for (const unit of PLAYER_UNITS) {
-          const exact = (unitScores[unit] / totalUnitScore) * availableSlots;
+          const exact = (UNIVERSAL_RATIO[unit] / UNIVERSAL_RATIO_TOTAL) * slots;
           allocation[unit] = Math.floor(exact);
           allocated += allocation[unit];
           remainders.push({ unit, remainder: exact - Math.floor(exact) });
         }
 
         remainders.sort((a, b) => b.remainder - a.remainder);
-        for (let i = 0; i < availableSlots - allocated; i++) {
+        for (let i = 0; i < slots - allocated; i++) {
           allocation[remainders[i].unit]++;
         }
         return allocation;
       };
 
-      // --- Plan 1: With Champions ---
-      // Pick up to 3 best champions, or fewer if maxSlots is very low
-      const maxChamps = Math.min(3, Math.max(0, maxSlots - 2)); 
-      const selectedChamps = champScores.slice(0, maxChamps).filter(c => c.score > 0).map(c => c.name);
-      
-      // If no threats, just pick some champs
-      if (selectedChamps.length === 0 && totalUnitScore === 0) {
-        selectedChamps.push(...unlockedChampions.slice(0, maxChamps));
-      }
-
-      const slotsForUnitsWithChamps = maxSlots - selectedChamps.length;
-      const unitsWithChamps = allocateSlots(slotsForUnitsWithChamps);
-
-      setPlanWithChamps({
-        units: unitsWithChamps,
-        champions: selectedChamps,
-        totalSlots: maxSlots
-      });
+      // Apply Threat Overrides to a composition
+      const applyThreatOverrides = (comp: Record<string, number>) => {
+        if (isRangedDangerous) {
+          // Transfer Archer count to front line
+          const archerCount = comp['Archer'];
+          comp['Archer'] = 0;
+          comp['Guard'] += Math.ceil(archerCount / 2);
+          comp['Soldier'] += Math.floor(archerCount / 2);
+          
+          if (!requiresRangers) {
+            // Transfer Ranger count to front line
+            const rangerCount = comp['Ranger'];
+            comp['Ranger'] = 0;
+            comp['Soldier'] += rangerCount;
+          } else {
+             // Rangers are required, make sure we have at least 1-2 based on threat
+             if (comp['Ranger'] === 0) {
+                comp['Ranger'] = 1;
+                if (comp['Guard'] > 0) comp['Guard']--;
+                else if (comp['Soldier'] > 0) comp['Soldier']--;
+             }
+          }
+        }
+        return comp;
+      };
 
       // --- Plan 2: Without Champions ---
-      const unitsNoChamps = allocateSlots(maxSlots);
-      
+      let unitsNoChamps = getBaseUniversalUnits(maxSlots);
+      if (totalThreatVolume > 0) {
+         unitsNoChamps = applyThreatOverrides(unitsNoChamps);
+      }
+
       setPlanNoChamps({
         units: unitsNoChamps,
         champions: [],
+        totalSlots: maxSlots
+      });
+
+      // --- Plan 1: With Champions ---
+      const maxChamps = Math.min(3, Math.max(0, maxSlots - 2)); 
+      const selectedChamps = champScores.slice(0, maxChamps).filter(c => c.score > 0).map(c => c.name);
+      if (selectedChamps.length === 0 && totalThreatVolume === 0) {
+        selectedChamps.push(...unlockedChampions.slice(0, maxChamps));
+      }
+
+      // We determine the best units by generating an ideal maxSlots composition and subtracting the chosen champions
+      let idealFullUnits = getBaseUniversalUnits(maxSlots);
+      if (totalThreatVolume > 0) {
+         idealFullUnits = applyThreatOverrides(idealFullUnits);
+      }
+
+      // Subtract equivalents for chosen champions
+      for (const champ of selectedChamps) {
+        const equiv = CHAMPION_EQUIVALENTS[champ];
+        if (idealFullUnits[equiv] > 0) {
+          idealFullUnits[equiv]--;
+        } else {
+          // If the exact equivalent is 0, subtract from highest available bucket to make room
+          const availableUnits = Object.entries(idealFullUnits).filter(([u, c]) => c > 0);
+          if (availableUnits.length > 0) {
+             availableUnits.sort((a, b) => b[1] - a[1]);
+             idealFullUnits[availableUnits[0][0]]--;
+          }
+        }
+      }
+
+      setPlanWithChamps({
+        units: idealFullUnits,
+        champions: selectedChamps,
         totalSlots: maxSlots
       });
       
       setIsCalculating(false);
     }, 600);
   };
+
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 p-4 md:p-8 font-sans selection:bg-indigo-500/30">
@@ -277,21 +390,55 @@ export default function DemaciaRisingOptimizer() {
                 ) : (
                   enemies.map((enemy, index) => (
                     <div key={enemy.id} className="flex items-center gap-3 bg-slate-950/50 p-3 rounded-xl border border-slate-800/50">
-                      <div className="flex-1">
-                        <select 
-                          value={enemy.type}
-                          onChange={(e) => handleEnemyChange(enemy.id, 'type', e.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                      <div className="flex-1 relative z-10 w-full col-span-2 sm:col-span-1">
+                        <button 
+                          onClick={() => setOpenDropdownId(openDropdownId === enemy.id ? null : enemy.id)}
+                          className="w-full flex items-center justify-between bg-slate-800 border border-slate-700 text-slate-200 rounded-lg pl-3 pr-3 py-2 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-colors"
                         >
-                          {ENEMY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div className="w-8 h-8 flex-shrink-0 rounded-md bg-slate-800/80 overflow-hidden flex items-center justify-center border border-slate-700/50 shadow-inner">
+                              <img src={getUnitIcon(enemy.type)} alt={enemy.type} className="w-full h-full object-contain drop-shadow-md" style={{ imageRendering: 'pixelated' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                            </div>
+                            <span className="truncate">{enemy.type}</span>
+                          </div>
+                          <span className="text-slate-500 text-xs ml-2">▼</span>
+                        </button>
+
+                        {/* Custom Dropdown Menu */}
+                        {openDropdownId === enemy.id && (
+                          <div className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-50 max-h-60 overflow-y-auto">
+                            {ENEMY_TYPES.map(t => (
+                              <button
+                                key={t}
+                                onClick={() => {
+                                  handleEnemyChange(enemy.id, 'type', t);
+                                  setOpenDropdownId(null);
+                                }}
+                                className={`w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-700 transition-colors ${enemy.type === t ? 'bg-amber-500/10 text-amber-400' : 'text-slate-200'}`}
+                              >
+                                <div className="w-8 h-8 flex-shrink-0 rounded-md bg-slate-900 overflow-hidden flex items-center justify-center border border-slate-800 shadow-inner">
+                                  <img src={getUnitIcon(t)} alt={t} className="w-full h-full object-contain drop-shadow-md" style={{ imageRendering: 'pixelated' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                                </div>
+                                <span className="truncate">{t}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div className="w-24">
                         <input 
                           type="number" 
                           min="1"
-                          value={enemy.count}
-                          onChange={(e) => handleEnemyChange(enemy.id, 'count', parseInt(e.target.value) || 0)}
+                          value={enemy.count || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            handleEnemyChange(enemy.id, 'count', val === '' ? 0 : parseInt(val, 10));
+                          }}
+                          onBlur={(e) => {
+                            if (!enemy.count || enemy.count < 1) {
+                              handleEnemyChange(enemy.id, 'count', 1);
+                            }
+                          }}
                           className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                         />
                       </div>
@@ -348,12 +495,19 @@ export default function DemaciaRisingOptimizer() {
                         <button
                           key={champ}
                           onClick={() => toggleChampion(champ)}
-                          className={`px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                          className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
                             isUnlocked 
                               ? 'bg-amber-500/10 border-amber-500/50 text-amber-300' 
                               : 'bg-slate-950 border-slate-800 text-slate-500 hover:border-slate-700'
                           }`}
                         >
+                           <img 
+                             src={getUnitIcon(champ)} 
+                             alt={champ}
+                             style={{ imageRendering: 'pixelated' }}
+                             className={`w-8 h-8 object-contain drop-shadow-md ${!isUnlocked && 'opacity-50 grayscale'}`}
+                             onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                           />
                           {champ}
                         </button>
                       );
@@ -408,15 +562,17 @@ export default function DemaciaRisingOptimizer() {
                         <div className="flex flex-wrap gap-2">
                           {Object.entries(planWithChamps.units).map(([unit, count]) => (
                             count > 0 && (
-                              <div key={unit} className="bg-slate-900 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                                <span className="text-slate-300">{unit}</span>
+                              <div key={unit} className="bg-slate-900 border border-slate-700 pl-2 pr-3 py-1.5 rounded-lg flex items-center gap-2">
+                                <img src={getUnitIcon(unit)} alt={unit} className="w-6 h-6 object-contain drop-shadow-sm" style={{ imageRendering: 'pixelated' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                                <span className="text-slate-300 ml-1">{unit}</span>
                                 <span className="bg-slate-800 text-slate-400 text-xs px-1.5 py-0.5 rounded font-mono">x{count}</span>
                               </div>
                             )
                           ))}
                           {planWithChamps.champions.map(champ => (
-                            <div key={champ} className="bg-amber-950/30 border border-amber-700/50 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                              <span className="text-amber-200 font-medium">{champ}</span>
+                            <div key={champ} className="bg-amber-950/30 border border-amber-700/50 pl-2 pr-3 py-1.5 rounded-lg flex items-center gap-2">
+                              <img src={getUnitIcon(champ)} alt={champ} className="w-6 h-6 object-contain drop-shadow-sm" style={{ imageRendering: 'pixelated' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                              <span className="text-amber-200 font-medium ml-1">{champ}</span>
                               <span className="bg-amber-900/50 text-amber-400/70 text-xs px-1.5 py-0.5 rounded font-mono">Champ</span>
                             </div>
                           ))}
@@ -441,8 +597,9 @@ export default function DemaciaRisingOptimizer() {
                         <div className="flex flex-wrap gap-2">
                           {Object.entries(planNoChamps.units).map(([unit, count]) => (
                             count > 0 && (
-                              <div key={unit} className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                                <span className="text-slate-400">{unit}</span>
+                              <div key={unit} className="bg-slate-900 border border-slate-800 pl-2 pr-3 py-1.5 rounded-lg flex items-center gap-2">
+                                <img src={getUnitIcon(unit)} alt={unit} className="w-6 h-6 object-contain drop-shadow-sm" style={{ imageRendering: 'pixelated' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                                <span className="text-slate-400 ml-1">{unit}</span>
                                 <span className="bg-slate-950 text-slate-500 text-xs px-1.5 py-0.5 rounded font-mono">x{count}</span>
                               </div>
                             )
