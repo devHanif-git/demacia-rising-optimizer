@@ -212,6 +212,17 @@ export default function DemaciaRisingOptimizer() {
       unlockedChampions.forEach(champ => {
         const tags = CHAMPION_DATA[champ] || [];
         let score = tags.reduce((sum, tag) => sum + (tagThreats[tag] || 0), 0);
+
+        // --- Global Champion Modifiers ---
+        // Bonus for enemies weak to heroes
+        score += (tagThreats['weak_to_hero'] || 0) * 1.5;
+
+        // Penalty for Tank/Melee heroes if heavy anti-tank/anti-melee threat exists
+        const antiTankThreat = (tagThreats['anti_tank'] || 0) + (tagThreats['anti_melee'] || 0);
+        const isTankDangerous = antiTankThreat > (totalThreatVolume * 0.15);
+        if (isTankDangerous && ['Poppy', 'Garen', 'Galio', 'Jarvan IV', 'Kayle'].includes(champ)) {
+           score -= antiTankThreat * 1.5;
+        }
         
         // --- Custom Champion Synergies ---
         if (champ === 'Sona') {
@@ -276,27 +287,48 @@ export default function DemaciaRisingOptimizer() {
 
       // Apply Threat Overrides to a composition
       const applyThreatOverrides = (comp: Record<string, number>) => {
-        if (isRangedDangerous) {
-          // Transfer Archer count to front line
+        const isTankDangerous = (tagThreats['anti_tank'] || 0) + (tagThreats['anti_melee'] || 0) > (totalThreatVolume * 0.15);
+
+        // 1. Anti-Ranged Pressure (Transfer Archer to Frontline)
+        if (isRangedDangerous && !isTankDangerous) {
           const archerCount = comp['Archer'];
           comp['Archer'] = 0;
           comp['Guard'] += Math.ceil(archerCount / 2);
           comp['Soldier'] += Math.floor(archerCount / 2);
-          
-          if (!requiresRangers) {
-            // Transfer Ranger count to front line
-            const rangerCount = comp['Ranger'];
-            comp['Ranger'] = 0;
-            comp['Soldier'] += rangerCount;
-          } else {
-             // Rangers are required, make sure we have at least 1-2 based on threat
-             if (comp['Ranger'] === 0) {
-                comp['Ranger'] = 1;
-                if (comp['Guard'] > 0) comp['Guard']--;
-                else if (comp['Soldier'] > 0) comp['Soldier']--;
+        }
+
+        // 2. Anti-Tank Pressure (Transfer Frontline to Backline)
+        if (isTankDangerous) {
+          const guardCount = comp['Guard'];
+          const soldierCount = comp['Soldier'];
+          comp['Guard'] = 0;
+          comp['Soldier'] = 0;
+          comp['Archer'] += Math.ceil((guardCount + soldierCount) / 2);
+          comp['Ranger'] += Math.floor((guardCount + soldierCount) / 2);
+        }
+
+        // 3. Ranger Necessity (Independent of Ranged danger)
+        if (requiresRangers) {
+          // E.g. every 10 threat volume needs 1 Ranger
+          let neededRangers = Math.max(1, Math.ceil(rangerNecessity / 10));
+          if (neededRangers > comp['Ranger']) {
+             let deficit = neededRangers - comp['Ranger'];
+             const order = ['Guard', 'Soldier', 'Archer']; // Drain units in this order to fund Rangers
+             for (const unit of order) {
+                while (deficit > 0 && comp[unit] > 0) {
+                   comp[unit]--;
+                   comp['Ranger']++;
+                   deficit--;
+                }
              }
           }
+        } else if (isRangedDangerous && !isTankDangerous) {
+          // If ranged is dangerous but tank is not, and no rangers are required, remove rangers
+          const rangerCount = comp['Ranger'];
+          comp['Ranger'] = 0;
+          comp['Soldier'] += rangerCount;
         }
+
         return comp;
       };
 
@@ -389,7 +421,7 @@ export default function DemaciaRisingOptimizer() {
                   <p className="text-slate-500 text-center py-4 italic">No enemies added. Click &quot;Add Enemy&quot; to start.</p>
                 ) : (
                   enemies.map((enemy, index) => (
-                    <div key={enemy.id} className="flex items-center gap-3 bg-slate-950/50 p-3 rounded-xl border border-slate-800/50">
+                    <div key={enemy.id} className={`flex items-center gap-3 bg-slate-950/50 p-3 rounded-xl border border-slate-800/50 ${openDropdownId === enemy.id ? 'relative z-50' : 'relative z-0'}`}>
                       <div className="flex-1 relative z-10 w-full col-span-2 sm:col-span-1">
                         <button 
                           onClick={() => setOpenDropdownId(openDropdownId === enemy.id ? null : enemy.id)}
